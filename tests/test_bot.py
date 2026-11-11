@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from bot import Bot, Store, daily_score, menu, winner
 from content import CATEGORIES, PROMPTS
+from conversation import load_turns, save_turns
 
 class LogicTests(unittest.TestCase):
     def test_win_and_draw(self):
@@ -86,10 +87,23 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_other_bots_commands_ignored(self):
         await self.bot.message(self.message('/menu@otherbot'))
         self.bot.send.assert_not_awaited()
+    async def test_debate_starts_and_routes_two_participants(self):
+        await self.bot.message(self.message('/debate Чай или кофе?'))
+        await self.bot.message(self.message('@test_goose_bot За чай', 1))
+        await self.bot.message(self.message('@test_goose_bot За кофе', 2))
+        calls = self.bot.ai.await_args_list
+        self.assertEqual(calls[0].kwargs['debate']['topic'], 'Чай или кофе?')
+        self.assertEqual(calls[0].kwargs['debate']['id'], calls[1].kwargs['debate']['id'])
+        await self.bot.message(self.message('/enddebate', 2))
+        self.assertEqual(self.bot.ai.await_count, 2)
+        await self.bot.message(self.message('/enddebate', 1))
+        self.assertTrue(self.bot.ai.await_args.kwargs['summary'])
+        self.assertIsNone(self.store.get('debate:-10:0'))
+
     async def test_forget(self):
-        self.bot.history[(-10,1,0)].append({'role':'user','content':'секрет'})
+        save_turns(self.store, 'conversation:-10:0', [{'uid':1,'input':'секрет'},{'uid':2,'input':'чужой'}])
         await self.bot.action(-10,1,'Павел','forget',None)
-        self.assertNotIn((-10,1,0),self.bot.history)
+        self.assertEqual(load_turns(self.store, 'conversation:-10:0'), [{'uid':2,'input':'чужой'}])
 
 class AITests(unittest.IsolatedAsyncioTestCase):
     async def test_global_budget_prevents_network(self):
@@ -123,13 +137,19 @@ class LocalAPITests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(payload['max_output_tokens'],512)
                     self.assertEqual(payload['reasoning'],'off')
                     self.assertFalse(payload['store'])
-                    self.assertEqual(__import__('json').loads(payload['input'])['current'],'Привет')
+                    self.assertIn('Привет', __import__('json').loads(payload['input'])['current'])
                     self.assertNotIn('Authorization',headers)
-                    self.assertEqual(len(bot.history[(1,2,0)]),2)
+                    self.assertEqual(load_turns(s,'conversation:1:0')[0]['answer'],'Гусь на связи!')
+                    await Bot(session,s).ai(1,3,'А мне?',name='Оля')
+                    context=__import__('json').loads(received[-1][0]['input'])
+                    self.assertIn('участник 2',context['history'][0]['content'])
+                    self.assertIn('Оля (участник 3)',context['current'])
+                    await bot.ai(2,3,'Другой чат')
+                    self.assertFalse(__import__('json').loads(received[-1][0]['input'])['history'])
                     self.assertIn('несколько секунд',await bot.ai(1,2,'Ещё'))
                 s.db.close()
         finally: await runner.cleanup()
-    async def test_api_error_keeps_history_empty(self):
+    async def test_api_error_retains_input_without_answer(self):
         import aiohttp
         from aiohttp import web
         async def handler(request): return web.Response(status=503)
@@ -144,7 +164,7 @@ class LocalAPITests(unittest.IsolatedAsyncioTestCase):
                     bot=Bot(session,s)
                     from content import FALLBACK
                     self.assertIn(await bot.ai(1,2,'Привет'),FALLBACK)
-                    self.assertEqual(len(bot.history[(1,2,0)]),0)
+                    self.assertNotIn('answer',load_turns(s,'conversation:1:0')[0])
                 s.db.close()
         finally: await runner.cleanup()
 
