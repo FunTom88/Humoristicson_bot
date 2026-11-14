@@ -50,3 +50,16 @@ sudo systemctl restart humoristicson-bot.service
 sudo git -C /opt/humoristicson-bot pull --ff-only
 sudo systemctl restart humoristicson-bot.service
 ```
+
+## Google Gemini
+
+Для ключа Google AI Studio задайте в конфигурации службы:
+
+```dotenv
+AI_PROVIDER=gemini
+AI_MODEL=gemini-3.8-flash
+AI_API_KEY=ваш_ключ_Google_AI_Studio
+AI_MAX_TOKENS=1024
+```
+
+Запросы идут в Google Gemini API по HTTPS. Текст обращения и контекст разговора, используемый для ответа, отправляются в Google. Доступность модели и квота зависят от проекта Google. Для возврата к локальному API укажите `AI_PROVIDER=lmstudio` и восстановите прежние `AI_MODEL`, `AI_BASE_URL` и `AI_API_KEY`.

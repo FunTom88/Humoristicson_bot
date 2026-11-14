@@ -15,7 +15,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import aiohttp
 from conversation import load_turns, save_turns, forget_participant
-from local_model import chat_endpoint, native_payload, extract_answer
+from model_api import ModelAPI
 from content import CATEGORIES, PROMPTS, QUIZZES, WORDS, FALLBACK
 
 load_dotenv(Path(__file__).resolve().with_name('.env'))
@@ -83,9 +83,7 @@ class Bot:
         self.cooldowns={}; self.chat_cooldowns={}
         self.allowed={int(x) for x in os.getenv('ALLOWED_CHAT_IDS','').split(',') if x.strip()}
         self.ai_limit=int(os.getenv('AI_DAILY_LIMIT','-1'))
-        self.ai_url=chat_endpoint(os.getenv('AI_BASE_URL','http://localhost:1235/v1'))
-        self.ai_key=os.getenv('AI_API_KEY','')
-        self.ai_model=os.getenv('AI_MODEL','qwen/qwen3.5-9b')
+        self.model_api = ModelAPI()
         self.ai_timeout=float(os.getenv('AI_TIMEOUT_SECONDS','180'))
         self.ai_gap=float(os.getenv('AI_COOLDOWN_SECONDS','15'))
     async def api(self,method,**payload):
@@ -139,10 +137,14 @@ class Bot:
                 messages.append({'role': 'assistant', 'content': turn['answer']})
         messages.append({'role': 'user', 'content': current})
         try:
-            async with self.http.post(self.ai_url,headers=({'Authorization':'Bearer '+self.ai_key} if self.ai_key else {}),json=native_payload(self.ai_model,messages,int(os.getenv('AI_MAX_TOKENS','512'))),timeout=aiohttp.ClientTimeout(total=self.ai_timeout)) as r:
+            async with self.http.post(
+                self.model_api.url, headers=self.model_api.headers,
+                json=self.model_api.payload(messages), allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=self.ai_timeout),
+            ) as r:
                 if r.status!=200: raise RuntimeError(f'AI HTTP {r.status}')
                 data=await r.json()
-            answer=extract_answer(data)
+            answer=self.model_api.answer(data)
             if not isinstance(answer,str): raise ValueError('empty AI answer')
             answer=re.sub(r'<think>.*?</think>', '', answer, flags=re.S).strip()
             if '<think>' in answer: answer=answer.split('<think>',1)[0].strip()
